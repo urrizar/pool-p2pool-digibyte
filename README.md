@@ -1,9 +1,9 @@
+Pool modified for Digibyte coin.
 ***This p2pool is best installed using the p2pool-oneclick installer.***
 
 
 		https://github.com/farsider350/p2pool-oneclick/blob/dgb-scrypt-merged/README.md
 
-Pool modified for Digibyte coin.
 For the experienced p2pool setup follow the guide bellow
 
 P2pool installation with pypy -- Windows
