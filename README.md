@@ -1,4 +1,4 @@
-Pool modified for Digibyte coin.
+***Pool modified for Digibyte coin.***
 ***This p2pool is best installed using the p2pool-oneclick installer.***
 
 
