@@ -41,7 +41,7 @@ class StratumRPCMiningProvider(object):
             self.transport.loseConnection()
             return
         jobid = str(random.randrange(2**128))
-        self.other.svc_mining.rpc_set_difficulty(bitcoin_data.target_to_difficulty(x['share_target'])).addErrback(lambda err: None)
+        self.other.svc_mining.rpc_set_difficulty(bitcoin_data.target_to_difficulty(x['share_target'])*self.wb.net.DUMB_SCRYPT_DIFF).addErrback(lambda err: None)
         self.other.svc_mining.rpc_notify(
             jobid, # jobid
             getwork._swap4(pack.IntType(256).pack(x['previous_block'])).encode('hex'), # prevhash
@@ -55,9 +55,10 @@ class StratumRPCMiningProvider(object):
         ).addErrback(lambda err: None)
         self.handler_map[jobid] = x, got_response
     
-    def rpc_submit(self, worker_name, job_id, extranonce2, ntime, nonce):
+    def rpc_submit(self, worker_name, job_id, extranonce2, ntime, nonce, *args):
         if job_id not in self.handler_map:
             print >>sys.stderr, '''Couldn't link returned work's job id with its handler. This should only happen if this process was recently restarted!'''
+            #self.other.svc_client.rpc_reconnect().addErrback(lambda err: None)
             return False
         x, got_response = self.handler_map[job_id]
         coinb_nonce = extranonce2.decode('hex')

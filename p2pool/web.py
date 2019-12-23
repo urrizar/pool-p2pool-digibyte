@@ -45,7 +45,7 @@ def _atomic_write(filename, data):
         os.remove(filename)
         os.rename(filename + '.new', filename)
 
-def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Event(), static_dir=None):
+def get_web_root(wb, datadir_path, bitcoind_getnetworkinfo_var, stop_event=variable.Event(), static_dir=None):
     node = wb.node
     start_time = time.time()
     
@@ -176,7 +176,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
             attempts_to_share=bitcoin_data.target_to_average_attempts(node.tracker.items[node.best_share_var.value].max_target),
             attempts_to_block=bitcoin_data.target_to_average_attempts(node.bitcoind_work.value['bits'].target),
             block_value=node.bitcoind_work.value['subsidy']*1e-8,
-            warnings=p2pool_data.get_warnings(node.tracker, node.best_share_var.value, node.net, bitcoind_getinfo_var.value, node.bitcoind_work.value),
+            warnings=p2pool_data.get_warnings(node.tracker, node.best_share_var.value, node.net, bitcoind_getnetworkinfo_var.value, node.bitcoind_work.value),
             donation_proportion=wb.donation_percentage/100,
             version=p2pool.__version__,
             protocol_version=p2p.Protocol.VERSION,
@@ -230,7 +230,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
         hash='%064x' % s.header_hash,
         number=p2pool_data.parse_bip0034(s.share_data['coinbase'])[0],
         share='%064x' % s.hash,
-    ) for s in node.tracker.get_chain(node.best_share_var.value, min(node.tracker.get_height(node.best_share_var.value), 24*60*60//node.net.SHARE_PERIOD)) if s.pow_hash <= s.header['bits'].target]))
+    ) for s in node.tracker.get_chain(node.best_share_var.value, min(node.tracker.get_height(node.best_share_var.value), node.net.CHAIN_LENGTH)) if s.pow_hash <= s.header['bits'].target]))
     web_root.putChild('uptime', WebInterface(lambda: time.time() - start_time))
     web_root.putChild('stale_rates', WebInterface(lambda: p2pool_data.get_stale_counts(node.tracker, node.best_share_var.value, decent_height(), rates=True)))
     
@@ -346,6 +346,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
     new_root.putChild('verified_tails', WebInterface(lambda: ['%064x' % x for t in node.tracker.verified.tails for x in node.tracker.verified.reverse.get(t, set())]))
     new_root.putChild('best_share_hash', WebInterface(lambda: '%064x' % node.best_share_var.value))
     new_root.putChild('my_share_hashes', WebInterface(lambda: ['%064x' % my_share_hash for my_share_hash in wb.my_share_hashes]))
+    new_root.putChild('my_share_hashes50', WebInterface(lambda: ['%064x' % my_share_hash for my_share_hash in list(wb.my_share_hashes)[:50]]))
     def get_share_data(share_hash_str):
         if int(share_hash_str, 16) not in node.tracker.items:
             return ''

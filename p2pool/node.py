@@ -17,7 +17,8 @@ class P2PNode(p2p.Node):
             best_share_hash_func=lambda: node.best_share_var.value,
             net=node.net,
             known_txs_var=node.known_txs_var,
-            mining_txs_var=node.mining_txs_var,
+            mining_txs_var=node.mining_txs_var,   # transactions from getblocktemplate
+            mining2_txs_var=node.mining2_txs_var, # transactions sent to miners
         **kwargs)
     
     def handle_shares(self, shares, peer):
@@ -40,9 +41,7 @@ class P2PNode(p2p.Node):
             
             self.node.tracker.add(share)
         
-        new_known_txs = dict(self.node.known_txs_var.value)
-        new_known_txs.update(all_new_txs)
-        self.node.known_txs_var.set(new_known_txs)
+        self.node.known_txs_var.add(all_new_txs)
         
         if new_count:
             self.node.set_best_share()
@@ -162,8 +161,17 @@ class Node(object):
         self.bitcoind = bitcoind
         self.net = net
         
+
+        self.known_txs_var = variable.VariableDict({}) # hash -> tx
+        self.mining_txs_var = variable.Variable({}) # hash -> tx
+        self.mining2_txs_var = variable.Variable({}) # hash -> tx
+        self.best_share_var = variable.Variable(None)
+        self.desired_var = variable.Variable(None)
+        self.txidcache = {}
+
         self.tracker = p2pool_data.OkayTracker(self.net)
         
+
         for share in shares:
             self.tracker.add(share)
         
@@ -186,7 +194,7 @@ class Node(object):
             while stop_signal.times == 0:
                 flag = self.factory.new_block.get_deferred()
                 try:
-                    self.bitcoind_work.set((yield helper.getwork(self.bitcoind, self.bitcoind_work.value['use_getblocktemplate'])))
+                    self.bitcoind_work.set((yield helper.getwork(self.bitcoind, self.bitcoind_work.value['use_getblocktemplate'], self.txidcache, self.known_txs_var.value)))
                 except:
                     log.err()
                 yield defer.DeferredList([flag, deferral.sleep(15)], fireOnOneCallback=True)
@@ -195,16 +203,10 @@ class Node(object):
         # PEER WORK
         
         self.best_block_header = variable.Variable(None)
-        def handle_header(new_header, valid=False):
-            new_hash = self.net.PARENT.POW_FUNC(bitcoin_data.block_header_type.pack(new_header))
+        def handle_header(new_header):
             # check that header matches current target
-            if new_hash > self.bitcoind_work.value['bits'].target:
+            if not (self.net.PARENT.POW_FUNC(bitcoin_data.block_header_type.pack(new_header)) <= self.bitcoind_work.value['bits'].target):
                 return
-            if not valid:
-                try:
-                    _ = (yield self.bitcoind.rpc_getblockheader(new_hash))
-                except:
-                    return
             bitcoind_best_block = self.bitcoind_work.value['previous_block']
             if (self.best_block_header.value is None
                 or (
@@ -221,18 +223,13 @@ class Node(object):
         def poll_header():
             if self.factory.conn.value is None:
                 return
-            handle_header((yield self.factory.conn.value.get_block_header(self.bitcoind_work.value['previous_block'])), True)
+            handle_header((yield self.factory.conn.value.get_block_header(self.bitcoind_work.value['previous_block'])))
         self.bitcoind_work.changed.watch(lambda _: poll_header())
         yield deferral.retry('Error while requesting best block header:')(poll_header)()
         
         # BEST SHARE
         
-        self.known_txs_var = variable.Variable({}) # hash -> tx
-        self.mining_txs_var = variable.Variable({}) # hash -> tx
         self.get_height_rel_highest = yield height_tracker.get_height_rel_highest_func(self.bitcoind, self.factory, lambda: self.bitcoind_work.value['previous_block'], self.net)
-        
-        self.best_share_var = variable.Variable(None)
-        self.desired_var = variable.Variable(None)
         self.bitcoind_work.changed.watch(lambda _: self.set_best_share())
         self.set_best_share()
         
@@ -241,19 +238,16 @@ class Node(object):
         # update mining_txs according to getwork results
         @self.bitcoind_work.changed.run_and_watch
         def _(_=None):
-            new_mining_txs = {}
-            new_known_txs = dict(self.known_txs_var.value)
-            for tx_hash, tx in zip(self.bitcoind_work.value['transaction_hashes'], self.bitcoind_work.value['transactions']):
-                new_mining_txs[tx_hash] = tx
-                new_known_txs[tx_hash] = tx
+            new_mining_txs = dict(zip(self.bitcoind_work.value['transaction_hashes'], self.bitcoind_work.value['transactions']))
+            added_known_txs = {hsh:tx for hsh,tx in new_mining_txs.iteritems() if not hsh in self.known_txs_var.value}
             self.mining_txs_var.set(new_mining_txs)
-            self.known_txs_var.set(new_known_txs)
+            self.known_txs_var.add(added_known_txs)
         # add p2p transactions from bitcoind to known_txs
         @self.factory.new_tx.watch
         def _(tx):
-            new_known_txs = dict(self.known_txs_var.value)
-            new_known_txs[bitcoin_data.hash256(bitcoin_data.tx_type.pack(tx))] = tx
-            self.known_txs_var.set(new_known_txs)
+            self.known_txs_var.add({
+                bitcoin_data.hash256(bitcoin_data.tx_type.pack(tx)): tx,
+            })
         # forward transactions seen to bitcoind
         @self.known_txs_var.transitioned.watch
         @defer.inlineCallbacks
@@ -284,6 +278,7 @@ class Node(object):
                 for peer in self.p2p_node.peers.itervalues():
                     new_known_txs.update(peer.remembered_txs)
             new_known_txs.update(self.mining_txs_var.value)
+            new_known_txs.update(self.mining2_txs_var.value)
             for share in self.tracker.get_chain(self.best_share_var.value, min(120, self.tracker.get_height(self.best_share_var.value))):
                 for tx_hash in share.new_transaction_hashes:
                     if tx_hash in self.known_txs_var.value:
